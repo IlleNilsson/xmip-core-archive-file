@@ -11,16 +11,19 @@
 //! data type — and `<root>/<data_type>/<identifier>.meta` beside it, TOML
 //! holding the same four fields every archive technology keeps: `data_type`,
 //! `identifier` and the `metadata` pairs, the bytes being the file itself. The
-//! receipt carries the SHA-256 of the bytes, and `restore` checks it.
+//! receipt carries the SHA-256 of the bytes, and `restore` checks it. The moment,
+//! the safe file name, the `.meta` suffix and the checksum come from the
+//! capability — `archive::timestamp`, `archive::layout` and `archive::checksum`
+//! (ADR-0044); the TOML sidecar is this technology's own.
 
-mod clock;
 mod meta;
 
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
-use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore};
-use sha2::{Digest, Sha256};
+use archive::checksum::sha256_hex;
+use archive::layout::{META_SUFFIX, sanitise};
+use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore, timestamp};
 
 use crate::meta::Meta;
 
@@ -79,14 +82,14 @@ impl ArchiveStore for FileArchive {
         let sidecar = Meta {
             data_type: item.data_type,
             identifier: item.identifier,
-            archived_at: clock::now(),
+            archived_at: timestamp::now(),
             metadata: item.metadata,
         };
         let meta_path = meta_path(&path);
         std::fs::write(&meta_path, sidecar.to_toml()).map_err(|cause| at(&meta_path, cause))?;
         Ok(ArchiveReceipt {
             location: format!("{}{data_type}/{identifier}", self.prefix()),
-            checksum: Some(sha256(&item.bytes)),
+            checksum: Some(sha256_hex(&item.bytes)),
         })
     }
 
@@ -94,7 +97,7 @@ impl ArchiveStore for FileArchive {
         let path = self.path_of(&receipt.location)?;
         let bytes = std::fs::read(&path).map_err(|cause| at(&path, cause))?;
         if let Some(expected) = &receipt.checksum {
-            let actual = sha256(&bytes);
+            let actual = sha256_hex(&bytes);
             if actual != *expected {
                 return Err(ArchiveError {
                     message: format!(
@@ -116,36 +119,12 @@ impl ArchiveStore for FileArchive {
     }
 }
 
-/// The sidecar beside an item file: the same name with `.meta` appended.
+/// The sidecar beside an item file: the same name with the capability's
+/// `.meta` suffix appended.
 fn meta_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
-    name.push(".meta");
+    name.push(META_SUFFIX);
     PathBuf::from(name)
-}
-
-/// The SHA-256 of `bytes` as lowercase hex, the receipt's checksum.
-fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
-}
-
-/// Make one path segment safe: anything but a plain filename character becomes an
-/// underscore, so an identifier like `poison-json#3` is a valid file name.
-fn sanitise(segment: &str) -> String {
-    segment
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 /// `path` as the path part of a URI: forward slashes, and a leading slash so a
@@ -239,7 +218,7 @@ mod tests {
             checksum.chars().all(|c| c.is_ascii_hexdigit()),
             "{checksum}"
         );
-        assert_eq!(checksum, sha256(b"{\"kept\":true}"));
+        assert_eq!(checksum, sha256_hex(b"{\"kept\":true}"));
         std::fs::remove_dir_all(&root).ok();
     }
 
