@@ -76,7 +76,7 @@ impl ArchiveStore for FileArchive {
         let identifier = sanitise(&item.identifier);
         let path = self.root.join(&data_type).join(&identifier);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(error)?;
+            std::fs::create_dir_all(parent).map_err(ArchiveError::caused_by)?;
         }
         std::fs::write(&path, &item.bytes).map_err(|cause| at(&path, cause))?;
         let sidecar = Meta {
@@ -141,12 +141,6 @@ fn uri_path(path: &Path) -> String {
 fn at(path: &Path, cause: impl Display) -> ArchiveError {
     ArchiveError {
         message: format!("{}: {cause}", path.display()),
-    }
-}
-
-fn error(cause: impl Display) -> ArchiveError {
-    ArchiveError {
-        message: cause.to_string(),
     }
 }
 
