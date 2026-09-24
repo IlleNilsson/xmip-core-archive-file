@@ -17,6 +17,8 @@ path = "src/lib.rs"
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The ArchiveStore trait and its types live there.
 archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main" }
+# TOML basic strings, quoted and read back the one way the estate does.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -1,9 +1,11 @@
 //! The sidecar beside an archived file — `<item>.meta` — as TOML written and
 //! read by hand: an `[item]` table naming what was archived and when, and a
 //! `[metadata]` table of the item's pairs. An operator reads it in any editor,
-//! and the crate carries no TOML dependency for two tables of strings.
+//! and the crate carries no TOML dependency for two tables of strings. Every
+//! key and value is quoted and read back through `codec::toml`, the one TOML
+//! basic string the estate writes.
 
-use std::fmt::Write;
+use codec::toml::{quote, unquote, unquote_prefix};
 
 /// What the sidecar records.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,11 +64,7 @@ impl Meta {
                 };
                 continue;
             }
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| at("not a key = value pair"))?;
-            let key = key_of(key.trim()).map_err(|reason| at(&reason))?;
-            let value = unquote(value.trim()).map_err(|reason| at(&reason))?;
+            let (key, value) = pair(line).map_err(|reason| at(&reason))?;
             match (table, key.as_str()) {
                 ("item", "data_type") => data_type = Some(value),
                 ("item", "identifier") => identifier = Some(value),
@@ -92,79 +90,31 @@ fn push_pair(text: &mut String, key: &str, value: &str) {
     text.push('\n');
 }
 
-/// A key as written: quoted, which is what this crate writes, or bare.
-fn key_of(key: &str) -> Result<String, String> {
-    if key.starts_with('"') {
-        unquote(key)
-    } else if !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        Ok(key.to_string())
+/// A `key = "value"` line: the key quoted, which is what this crate writes
+/// and may hold `=`, or bare.
+fn pair(line: &str) -> Result<(String, String), String> {
+    let (key, rest) = if line.starts_with('"') {
+        unquote_prefix(line).map_err(|error| error.to_string())?
     } else {
-        Err(format!("{key} is not a key"))
-    }
-}
-
-/// `text` as a TOML basic string: quoted, with the escapes TOML requires —
-/// quote, backslash and every control character.
-fn quote(text: &str) -> String {
-    let mut out = String::from("\"");
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{8}' => out.push_str("\\b"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\u{c}' => out.push_str("\\f"),
-            '\r' => out.push_str("\\r"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04X}", u32::from(c));
-            }
-            c => out.push(c),
+        let end = line
+            .find(|c: char| c == '=' || c.is_whitespace())
+            .unwrap_or(line.len());
+        let key = &line[..end];
+        let bare = !key.is_empty()
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !bare {
+            return Err(format!("{key} is not a key"));
         }
-    }
-    out.push('"');
-    out
-}
-
-/// A TOML basic string back to its text.
-fn unquote(literal: &str) -> Result<String, String> {
-    let inner = literal
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .ok_or_else(|| format!("{literal} is not a basic string"))?;
-    let mut out = String::new();
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('b') => out.push('\u{8}'),
-            Some('t') => out.push('\t'),
-            Some('n') => out.push('\n'),
-            Some('f') => out.push('\u{c}'),
-            Some('r') => out.push('\r'),
-            Some('"') => out.push('"'),
-            Some('\\') => out.push('\\'),
-            Some('u') => out.push(code_point(&mut chars, 4)?),
-            Some('U') => out.push(code_point(&mut chars, 8)?),
-            other => return Err(format!("unknown escape \\{}", other.unwrap_or(' '))),
-        }
-    }
-    Ok(out)
-}
-
-fn code_point(chars: &mut std::str::Chars<'_>, digits: usize) -> Result<char, String> {
-    let hex: String = chars.by_ref().take(digits).collect();
-    u32::from_str_radix(&hex, 16)
-        .ok()
-        .and_then(char::from_u32)
-        .ok_or_else(|| format!("\\u{hex} is not a character"))
+        (key.to_string(), &line[end..])
+    };
+    let value = rest
+        .trim_start()
+        .strip_prefix('=')
+        .ok_or("not a key = value pair")?;
+    let value = unquote(value.trim()).map_err(|error| error.to_string())?;
+    Ok((key, value))
 }
 
 #[cfg(test)]
@@ -215,6 +165,23 @@ mod tests {
         let parsed = Meta::parse(text).expect("parse");
         assert_eq!(parsed.data_type, "csv");
         assert_eq!(parsed.metadata, vec![("k-1".to_string(), "v".to_string())]);
+    }
+
+    #[test]
+    fn a_key_holding_an_equals_sign_and_every_control_character_round_trip() {
+        let odd = Meta {
+            metadata: vec![
+                ("a = b".to_string(), "c = \"d\"".to_string()),
+                (
+                    "\u{0}\r\u{7f}".to_string(),
+                    "Zoë\u{a0}名前\u{1b}".to_string(),
+                ),
+            ],
+            ..meta()
+        };
+        let text = odd.to_toml();
+        assert!(text.contains(r#""\u0000\r\u007F""#), "{text}");
+        assert_eq!(Meta::parse(&text).expect("parse"), odd);
     }
 
     #[test]
