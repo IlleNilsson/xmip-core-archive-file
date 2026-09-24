@@ -42,7 +42,7 @@ impl FileArchive {
 
     /// What every receipt of this root shares: `file:///<root>/`.
     fn prefix(&self) -> String {
-        format!("file://{}/", uri_path(&self.root))
+        format!("file://{}/", net::uri::path_of(&self.root))
     }
 
     /// The item file a receipt names, refusing a receipt from under another
@@ -125,17 +125,6 @@ fn meta_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(META_SUFFIX);
     PathBuf::from(name)
-}
-
-/// `path` as the path part of a URI: forward slashes, and a leading slash so a
-/// Windows drive reads `/C:/...` after the `file://` authority.
-fn uri_path(path: &Path) -> String {
-    let text = path.display().to_string().replace('\\', "/");
-    if text.starts_with('/') {
-        text
-    } else {
-        format!("/{text}")
-    }
 }
 
 fn at(path: &Path, cause: impl Display) -> ArchiveError {
