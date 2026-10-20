@@ -22,7 +22,7 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
 use archive::checksum::sha256_hex;
-use archive::layout::{META_SUFFIX, sanitise};
+use archive::layout::{META_SUFFIX, sanitize};
 use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore, timestamp};
 
 use crate::meta::Meta;
@@ -72,8 +72,8 @@ impl FileArchive {
 
 impl ArchiveStore for FileArchive {
     fn archive(&self, item: ArchiveItem) -> Result<ArchiveReceipt, ArchiveError> {
-        let data_type = sanitise(&item.data_type);
-        let identifier = sanitise(&item.identifier);
+        let data_type = sanitize(&item.data_type);
+        let identifier = sanitize(&item.identifier);
         let path = self.root.join(&data_type).join(&identifier);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(ArchiveError::caused_by)?;
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn a_risky_identifier_is_made_a_safe_file_name_and_kept_in_the_sidecar() {
-        let root = scratch("sanitise");
+        let root = scratch("sanitize");
         let store = FileArchive::new(&root);
         let original = item("poison-json#3/../x");
         let receipt = store.archive(original.clone()).expect("archive");
