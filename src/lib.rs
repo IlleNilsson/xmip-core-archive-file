@@ -149,7 +149,7 @@ mod tests {
             identifier: id.to_string(),
             bytes: b"{\"kept\":true}".to_vec(),
             metadata: vec![
-                ("source".to_string(), "playground".to_string()),
+                ("source".to_string(), "essentials".to_string()),
                 (
                     "note".to_string(),
                     "with \"quotes\" and a\nnewline".to_string(),
@@ -179,7 +179,7 @@ mod tests {
         let sidecar = std::fs::read_to_string(meta_path(&path)).expect("the sidecar");
         assert!(sidecar.starts_with("[item]\n"), "{sidecar}");
         assert!(
-            sidecar.contains("[metadata]\n\"source\" = \"playground\""),
+            sidecar.contains("[metadata]\n\"source\" = \"essentials\""),
             "{sidecar}"
         );
         let restored = store.restore(&receipt).expect("restore");
