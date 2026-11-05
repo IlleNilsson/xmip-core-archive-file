@@ -127,7 +127,7 @@ mod tests {
             identifier: "it's \"odd\" \\ id\u{1f}x".to_string(),
             archived_at: "2026-09-09T00:00:00Z".to_string(),
             metadata: vec![
-                ("source".to_string(), "playground".to_string()),
+                ("source".to_string(), "essentials".to_string()),
                 (
                     "note with space".to_string(),
                     "two\nlines\ttabbed".to_string(),
@@ -150,7 +150,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("\n[metadata]\n\"source\" = \"playground\"\n"),
+            text.contains("\n[metadata]\n\"source\" = \"essentials\"\n"),
             "{text}"
         );
         assert!(text.contains(r#""two\nlines\ttabbed""#), "{text}");
