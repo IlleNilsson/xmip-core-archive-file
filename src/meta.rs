@@ -53,10 +53,7 @@ impl Meta {
                 continue;
             }
             let at = |reason: &str| format!("line {}: {reason}", index + 1);
-            if let Some(name) = line
-                .strip_prefix('[')
-                .and_then(|rest| rest.strip_suffix(']'))
-            {
+            if let Some(name) = line.strip_circumfix('[', ']') {
                 table = match name.trim() {
                     "item" => "item",
                     "metadata" => "metadata",
