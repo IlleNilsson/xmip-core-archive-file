@@ -19,6 +19,8 @@
 mod meta;
 
 use std::fmt::Display;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use archive::checksum::sha256_hex;
@@ -73,12 +75,9 @@ impl FileArchive {
 impl ArchiveStore for FileArchive {
     fn archive(&self, item: ArchiveItem) -> Result<ArchiveReceipt, ArchiveError> {
         let data_type = sanitize(&item.data_type);
-        let identifier = sanitize(&item.identifier);
-        let path = self.root.join(&data_type).join(&identifier);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(ArchiveError::caused_by)?;
-        }
-        std::fs::write(&path, &item.bytes).map_err(|cause| at(&path, cause))?;
+        let directory = self.root.join(&data_type);
+        std::fs::create_dir_all(&directory).map_err(ArchiveError::caused_by)?;
+        let (name, path) = create(&directory, &sanitize(&item.identifier), &item.bytes)?;
         let sidecar = Meta {
             data_type: item.data_type,
             identifier: item.identifier,
@@ -86,9 +85,10 @@ impl ArchiveStore for FileArchive {
             metadata: item.metadata,
         };
         let meta_path = meta_path(&path);
-        std::fs::write(&meta_path, sidecar.to_toml()).map_err(|cause| at(&meta_path, cause))?;
+        write_new(&meta_path, sidecar.to_toml().as_bytes())
+            .map_err(|cause| at(&meta_path, cause))?;
         Ok(ArchiveReceipt {
-            location: format!("{}{data_type}/{identifier}", self.prefix()),
+            location: format!("{}{data_type}/{name}", self.prefix()),
             checksum: Some(sha256_hex(&item.bytes)),
         })
     }
@@ -117,6 +117,47 @@ impl ArchiveStore for FileArchive {
             metadata: sidecar.metadata,
         })
     }
+}
+
+/// The item's bytes in a file of its own under `directory`, and its name
+/// and path: `<identifier>`, or where that name holds an item already the
+/// first of `<identifier>.2`, `<identifier>.3`, … that does not. A file is
+/// only ever created, never written over, so archiving an identifier again
+/// keeps what was archived under it; a sanitized identifier holds no dot,
+/// so the suffix names no other item, and every receipt restores the bytes
+/// it was given for.
+fn create(
+    directory: &Path,
+    identifier: &str,
+    bytes: &[u8],
+) -> Result<(String, PathBuf), ArchiveError> {
+    let mut copy = 1_u64;
+    loop {
+        let name = if copy == 1 {
+            identifier.to_string()
+        } else {
+            format!("{identifier}.{copy}")
+        };
+        let path = directory.join(&name);
+        match write_new(&path, bytes) {
+            Ok(()) => return Ok((name, path)),
+            Err(taken) if taken.kind() == io::ErrorKind::AlreadyExists => copy += 1,
+            Err(cause) => return Err(at(&path, cause)),
+        }
+    }
+}
+
+/// `bytes` in a file created at `path`, refused where `path` exists; a
+/// file whose write failed is removed, so no part of one is left.
+fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let written = file.write_all(bytes);
+    drop(file);
+    if written.is_err() {
+        // Closed first: Windows removes no file that is still open.
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 /// The sidecar beside an item file: the same name with the capability's
@@ -187,6 +228,33 @@ mod tests {
             restored, original,
             "the file and its sidecar give the item back"
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_identifier_archived_again_keeps_what_was_archived_under_it() {
+        // The second write went over the first: the first receipt restored
+        // the second's bytes, refused for its checksum.
+        let root = scratch("again");
+        let store = FileArchive::new(&root);
+        let first = item("json-1");
+        let second = ArchiveItem {
+            bytes: b"{\"kept\":false}".to_vec(),
+            ..item("json-1")
+        };
+        // `json_1` is what `json.1` sanitizes to: another item, no copy.
+        let third = item("json.1");
+        let receipts: Vec<ArchiveReceipt> = [&first, &second, &first, &third]
+            .map(|item| store.archive(item.clone()).expect("archive"))
+            .into();
+        let names: Vec<&str> = receipts
+            .iter()
+            .map(|receipt| receipt.location.rsplit('/').next().expect("a name"))
+            .collect();
+        assert_eq!(names, ["json-1", "json-1.2", "json-1.3", "json_1"]);
+        for (receipt, archived) in receipts.iter().zip([&first, &second, &first, &third]) {
+            assert_eq!(&store.restore(receipt).expect("restore"), archived);
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 
