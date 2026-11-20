@@ -128,24 +128,7 @@ mod tests {
     use super::*;
     use archive::checksum::sha256_hex;
     use archive::sidecar::Sidecar;
-
-    /// A root of its own under the temporary directory, removed when the
-    /// test ends, also when it fails.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("xmip-file-{name}-{}", std::process::id()));
-            std::fs::remove_dir_all(&dir).ok();
-            Self(dir)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.0).ok();
-        }
-    }
+    use file::temporary::Folder;
 
     fn item(id: &str) -> ArchiveItem {
         ArchiveItem {
@@ -179,27 +162,25 @@ mod tests {
 
     /// The names in `dir`, sorted; none where it is not there.
     fn names(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .map(|entry| {
-                        entry
-                            .expect("an entry")
-                            .file_name()
-                            .to_string_lossy()
-                            .into()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut names: Vec<String> = std::fs::read_dir(dir).map_or_default(|entries| {
+            entries
+                .map(|entry| {
+                    entry
+                        .expect("an entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into()
+                })
+                .collect()
+        });
         names.sort();
         names
     }
 
     #[test]
     fn an_archived_item_is_a_file_with_its_metadata_beside_it() {
-        let root = Scratch::new("roundtrip");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-roundtrip");
+        let store = FileArchive::new(&*root);
         let original = item("json-1");
         let receipt = store.archive(original.clone()).expect("archive");
         assert!(
@@ -212,9 +193,9 @@ mod tests {
             "{}",
             receipt.location
         );
-        let path = root.0.join("json").join("json-1");
+        let path = root.join("json").join("json-1");
         assert_eq!(std::fs::read(&path).expect("the bytes"), original.bytes);
-        let meta = root.0.join(".meta").join("json").join("json-1");
+        let meta = root.join(".meta").join("json").join("json-1");
         let sidecar = std::fs::read_to_string(meta).expect("the sidecar");
         assert!(sidecar.starts_with("[item]\n"), "{sidecar}");
         assert!(
@@ -234,18 +215,18 @@ mod tests {
 
     #[test]
     fn an_identifier_archived_again_with_the_same_bytes_answers_the_same_receipt() {
-        let root = Scratch::new("same");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-same");
+        let store = FileArchive::new(&*root);
         let first = store.archive(item("json-1")).expect("archive");
         let again = store.archive(item("json-1")).expect("archived again");
         assert_eq!(again, first);
-        assert_eq!(names(&root.0.join("json")), ["json-1"]);
+        assert_eq!(names(&root.join("json")), ["json-1"]);
     }
 
     #[test]
     fn an_identifier_archived_again_with_other_bytes_is_refused_and_the_earlier_receipt_restores() {
-        let root = Scratch::new("other");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-other");
+        let store = FileArchive::new(&*root);
         let receipt = store.archive(item("json-1")).expect("archive");
         let refused = store
             .archive(other_bytes("json-1"))
@@ -257,13 +238,13 @@ mod tests {
             "{refused}"
         );
         assert_eq!(store.restore(&receipt).expect("restore"), item("json-1"));
-        assert_eq!(names(&root.0.join("json")), ["json-1"]);
+        assert_eq!(names(&root.join("json")), ["json-1"]);
     }
 
     #[test]
     fn two_identifiers_that_sanitize_alike_are_refused() {
-        let root = Scratch::new("alike");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-alike");
+        let store = FileArchive::new(&*root);
         let receipt = store.archive(item("json.1")).expect("archive");
         let refused = store
             .archive(item("json_1"))
@@ -279,8 +260,8 @@ mod tests {
 
     #[test]
     fn order_and_order_meta_are_two_items() {
-        let root = Scratch::new("order");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-order");
+        let store = FileArchive::new(&*root);
         let order = item("order");
         let order_meta = ArchiveItem {
             bytes: b"not order's metadata".to_vec(),
@@ -294,8 +275,8 @@ mod tests {
 
     #[test]
     fn an_interrupted_pair_is_completed_by_its_repeat_and_refuses_another_item() {
-        let root = Scratch::new("interrupted");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-interrupted");
+        let store = FileArchive::new(&*root);
         // An archive stopped after its claim: the metadata is there, the
         // bytes are not.
         let original = item("json-1");
@@ -306,7 +287,7 @@ mod tests {
             checksum: sha256_hex(&original.bytes),
             metadata: original.metadata.clone(),
         };
-        let claimed = root.0.join(".meta").join("json");
+        let claimed = root.join(".meta").join("json");
         std::fs::create_dir_all(&claimed).expect("the metadata directory");
         std::fs::write(claimed.join("json-1"), claim.to_toml()).expect("the claim");
         let refused = store.archive(other_bytes("json-1")).expect_err("claimed");
@@ -329,10 +310,10 @@ mod tests {
 
     #[test]
     fn bytes_without_metadata_are_refused_on_restore() {
-        let root = Scratch::new("unclaimed");
-        let store = FileArchive::new(&root.0);
-        std::fs::create_dir_all(root.0.join("json")).expect("the directory");
-        std::fs::write(root.0.join("json").join("json-1"), b"{\"kept\":true}").expect("bytes");
+        let root = Folder::new("archive-file-unclaimed");
+        let store = FileArchive::new(&*root);
+        std::fs::create_dir_all(root.join("json")).expect("the directory");
+        std::fs::write(root.join("json").join("json-1"), b"{\"kept\":true}").expect("bytes");
         for relative in ["json/json-1", "json/never-archived"] {
             let refused = store
                 .restore(&receipt_at(&store, relative))
@@ -348,10 +329,10 @@ mod tests {
 
     #[test]
     fn a_foreign_object_at_the_key_is_refused() {
-        let root = Scratch::new("foreign");
-        let store = FileArchive::new(&root.0);
-        let path = root.0.join("json").join("json-1");
-        std::fs::create_dir_all(root.0.join("json")).expect("the directory");
+        let root = Folder::new("archive-file-foreign");
+        let store = FileArchive::new(&*root);
+        let path = root.join("json").join("json-1");
+        std::fs::create_dir_all(root.join("json")).expect("the directory");
         std::fs::write(&path, b"someone else's").expect("a foreign file");
         let refused = store.archive(item("json-1")).expect_err("foreign bytes");
         assert!(
@@ -361,26 +342,26 @@ mod tests {
             "{refused}"
         );
         assert_eq!(std::fs::read(&path).expect("left"), b"someone else's");
-        assert_eq!(names(&root.0.join("json")), ["json-1"]);
+        assert_eq!(names(&root.join("json")), ["json-1"]);
     }
 
     #[test]
     fn a_data_type_beginning_with_a_dot_is_refused() {
-        let root = Scratch::new("dot");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-dot");
+        let store = FileArchive::new(&*root);
         let hidden = ArchiveItem {
             data_type: ".meta".to_string(),
             ..item("json-1")
         };
         let refused = store.archive(hidden).expect_err("a dot first");
         assert!(refused.message.contains("begins with a dot"), "{refused}");
-        assert!(names(&root.0).is_empty(), "nothing is written");
+        assert!(names(&root).is_empty(), "nothing is written");
     }
 
     #[test]
     fn a_write_failing_half_way_leaves_no_item() {
-        let root = Scratch::new("half-way");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-half-way");
+        let store = FileArchive::new(&*root);
         let original = item("json-1");
         // The archive's claim, and then its bytes failing half way.
         let claim = Sidecar {
@@ -392,16 +373,13 @@ mod tests {
         };
         let claimed = store.create(".meta/json/json-1", claim.to_toml().as_bytes());
         assert_eq!(claimed.expect("the claim"), Created::Created);
-        let path = root.0.join("json").join("json-1");
+        let path = root.join("json").join("json-1");
         let failed = whole::create(&path, |file| {
             file.write_all(&original.bytes[..4])?;
             Err(io::Error::other("the disk is full"))
         });
         assert!(failed.is_err());
-        assert!(
-            names(&root.0.join("json")).is_empty(),
-            "nothing at the name"
-        );
+        assert!(names(&root.join("json")).is_empty(), "nothing at the name");
         let refused = store
             .restore(&receipt_at(&store, "json/json-1"))
             .expect_err("no item");
@@ -417,8 +395,8 @@ mod tests {
 
     #[test]
     fn the_receipt_carries_the_sha256_of_the_bytes() {
-        let root = Scratch::new("checksum");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-checksum");
+        let store = FileArchive::new(&*root);
         let receipt = store.archive(item("json-2")).expect("archive");
         let checksum = receipt.checksum.expect("a checksum");
         assert_eq!(checksum.len(), 64, "{checksum}");
@@ -431,8 +409,8 @@ mod tests {
 
     #[test]
     fn a_risky_identifier_is_made_a_safe_file_name_and_kept_in_the_sidecar() {
-        let root = Scratch::new("sanitize");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-sanitize");
+        let store = FileArchive::new(&*root);
         let original = item("poison-json#3/../x");
         let receipt = store.archive(original.clone()).expect("archive");
         assert!(!receipt.location.contains(".."), "no traversal survives");
@@ -450,8 +428,8 @@ mod tests {
 
     #[test]
     fn a_mismatched_checksum_in_the_receipt_is_refused() {
-        let root = Scratch::new("mismatch");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-mismatch");
+        let store = FileArchive::new(&*root);
         let mut receipt = store.archive(item("json-4")).expect("archive");
         receipt.checksum = Some("0".repeat(64));
         let refused = store.restore(&receipt).expect_err("the receipt lies");
@@ -460,8 +438,8 @@ mod tests {
 
     #[test]
     fn a_receipt_from_under_another_root_is_refused() {
-        let root = Scratch::new("elsewhere");
-        let store = FileArchive::new(&root.0);
+        let root = Folder::new("archive-file-elsewhere");
+        let store = FileArchive::new(&*root);
         let receipt = ArchiveReceipt {
             location: "file:///elsewhere/json/x".to_string(),
             checksum: None,
