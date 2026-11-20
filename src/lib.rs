@@ -22,19 +22,26 @@
 //! file is created whole, synced, linked to its name only where the name is
 //! free and its directory synced (`archive::whole`), so an item is on disk
 //! before its receipt is given and a write that fails leaves nothing at its
-//! name. Identifiers that sanitize alike are refused in words.
+//! name; a file a process that died left under its mark is removed by the
+//! sweep the next write into its directory starts beside it, never one a
+//! live process holds (ADR-0040, amendment 2026-11-20). Identifiers that
+//! sanitize alike are refused in words. The receipt, `file:///<root>/<key>`,
+//! is the capability's for every archive on a file system
+//! (`archive::directory`), and only a key whose every segment names a file
+//! under the root is read or written.
 
 use std::fmt::Display;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use archive::directory::Directory;
 use archive::layout::sanitize;
 use archive::named::{self, Created, Named};
 use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore, whole};
 
 /// An archive that persists items as files rooted at a directory.
 pub struct FileArchive {
-    root: PathBuf,
+    directory: Directory,
 }
 
 impl FileArchive {
@@ -42,27 +49,9 @@ impl FileArchive {
     /// as items are archived.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    /// What every receipt of this root shares: `file:///<root>/`.
-    fn prefix(&self) -> String {
-        format!("file://{}/", net::uri::path_of(&self.root))
-    }
-
-    /// The file a key names under the root, refused where a segment is
-    /// empty, `.` or `..`: nothing outside the root is ever read or written.
-    fn path_of(&self, key: &str) -> Result<PathBuf, ArchiveError> {
-        let mut path = self.root.clone();
-        for segment in key.split('/') {
-            if segment.is_empty() || segment == "." || segment == ".." {
-                return Err(ArchiveError {
-                    message: format!("{key} does not name an item under the archive"),
-                });
-            }
-            path.push(segment);
+        Self {
+            directory: Directory::new(root),
         }
-        Ok(path)
     }
 }
 
@@ -78,12 +67,12 @@ impl ArchiveStore for FileArchive {
 
 impl Named for FileArchive {
     fn create(&self, key: &str, bytes: &[u8]) -> Result<Created, ArchiveError> {
-        let path = self.path_of(key)?;
+        let path = self.directory.path_of(key)?;
         whole::create(&path, |file| file.write_all(bytes)).map_err(|cause| at(&path, cause))
     }
 
     fn read(&self, key: &str) -> Result<Option<Vec<u8>>, ArchiveError> {
-        let path = self.path_of(key)?;
+        let path = self.directory.path_of(key)?;
         match std::fs::read(&path) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(missing) if missing.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -92,23 +81,14 @@ impl Named for FileArchive {
     }
 
     fn location(&self, key: &str) -> String {
-        format!("{}{key}", self.prefix())
+        self.directory.location(key)
     }
 
     /// The key a receipt names, refusing a receipt from under another root:
     /// the key is the receipt's own segments, so nothing outside the root is
     /// ever read.
     fn key(&self, location: &str) -> Result<String, ArchiveError> {
-        let key = location
-            .strip_prefix(&self.prefix())
-            .ok_or_else(|| ArchiveError {
-                message: format!(
-                    "{location} is not a receipt of the archive at {}",
-                    self.root.display()
-                ),
-            })?;
-        self.path_of(key)?;
-        Ok(key.to_string())
+        self.directory.key(location).map(str::to_string)
     }
 
     /// A safe file name: a directory holds no `/`, and no `..` survives.
@@ -155,7 +135,7 @@ mod tests {
     /// A receipt for `relative` under the store's root, with no checksum.
     fn receipt_at(store: &FileArchive, relative: &str) -> ArchiveReceipt {
         ArchiveReceipt {
-            location: format!("{}{relative}", store.prefix()),
+            location: store.location(relative),
             checksum: None,
         }
     }
@@ -391,6 +371,42 @@ mod tests {
         );
         let receipt = store.archive(original.clone()).expect("archived whole");
         assert_eq!(store.restore(&receipt).expect("restore"), original);
+    }
+
+    #[test]
+    fn a_file_left_under_its_mark_is_removed_by_the_next_archive_into_its_directory() {
+        let root = Folder::new("archive-file-left");
+        let store = FileArchive::new(&*root);
+        // What a process that died between a write and its link left: a
+        // file under the mark, held by no process.
+        let left = "json-0.xmip-archiving.4294967295.0";
+        for directory in [root.join("json"), root.join(".meta").join("json")] {
+            std::fs::create_dir_all(&directory).expect("the directory");
+            std::fs::write(directory.join(left), b"half").expect("a file left behind");
+        }
+        let receipt = store.archive(item("json-1")).expect("archive");
+        whole::swept(&root.join("json"));
+        whole::swept(&root.join(".meta").join("json"));
+        assert_eq!(names(&root.join("json")), ["json-1"]);
+        assert_eq!(names(&root.join(".meta").join("json")), ["json-1"]);
+        assert_eq!(store.restore(&receipt).expect("restore"), item("json-1"));
+    }
+
+    #[test]
+    fn a_file_another_archive_is_writing_is_never_removed() {
+        let root = Folder::new("archive-file-live");
+        let store = FileArchive::new(&*root);
+        std::fs::create_dir_all(root.join("json")).expect("the directory");
+        // Another archive's write into the same directory, still going.
+        let writing = root.join("json").join("json-0.xmip-archiving.4294967295.0");
+        let live = file::held::create(&writing).expect("held by its writer");
+        store.archive(item("json-1")).expect("archive");
+        whole::swept(&root.join("json"));
+        assert_eq!(
+            names(&root.join("json")),
+            ["json-0.xmip-archiving.4294967295.0", "json-1"]
+        );
+        drop(live);
     }
 
     #[test]

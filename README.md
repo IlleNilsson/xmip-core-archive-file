@@ -12,7 +12,13 @@ archive (`archive::named`): the metadata is created first, as the claim,
 then the bytes, and the receipt is given only after both. Each file is
 written beside its name, synced, hard-linked to the name only where the
 name is free, and its directory synced (`archive::whole`), so a write that
-fails leaves nothing at the name. An identifier archived again with the
+fails leaves nothing at the name; a file a process that died left under its
+mark beside a name is removed by the sweep the next write into its
+directory starts beside it, never one a live process holds (ADR-0040,
+amendment 2026-11-20). The receipt,
+`file:///<root>/<key>` and the SHA-256 of the bytes, is the capability's
+for every archive on a file system (`archive::directory`), which the
+Parquet archive answers too. An identifier archived again with the
 same bytes answers the same receipt; with other bytes it is refused, and
 so is an identifier that becomes the same file name as another's. A
 restore refuses a name without metadata, and bytes whose checksum is not
