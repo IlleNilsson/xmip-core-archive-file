@@ -116,7 +116,7 @@ mod tests {
             identifier: id.to_string(),
             bytes: b"{\"kept\":true}".to_vec(),
             metadata: vec![
-                ("source".to_string(), "essentials".to_string()),
+                ("source".to_string(), "system-test".to_string()),
                 (
                     "note".to_string(),
                     "with \"quotes\" and a\nnewline".to_string(),
@@ -179,7 +179,7 @@ mod tests {
         let sidecar = std::fs::read_to_string(meta).expect("the sidecar");
         assert!(sidecar.starts_with("[item]\n"), "{sidecar}");
         assert!(
-            sidecar.contains("[metadata]\n\"source\" = \"essentials\""),
+            sidecar.contains("[metadata]\n\"source\" = \"system-test\""),
             "{sidecar}"
         );
         assert_eq!(
