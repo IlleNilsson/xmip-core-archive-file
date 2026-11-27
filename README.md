@@ -29,11 +29,6 @@ every key and value is a basic string quoted and read back through
 `xmip-core-library-codec`, every control character escaped, so a key may
 hold `=` or a quote, and it records the SHA-256 of the bytes.
 
-## Toolchain
-
-`rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
-here.
-
 ## Verification
 
 The included workflow is manual-only and calls the versioned shared workflow at
